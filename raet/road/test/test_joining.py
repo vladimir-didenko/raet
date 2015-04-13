@@ -13841,6 +13841,52 @@ class BasicTestCase(unittest.TestCase):
             stack.server.close()
             stack.clearAllKeeps()
 
+    def testJoinerAcceptIsIdempotent(self):
+        '''
+        Test joiner.accept is idempotent - send duplicate of accept message from joinent
+        '''
+        console.terse("{0}\n".format(self.testJoinerAcceptIsIdempotent.__doc__))
+        alpha, beta = self.bootstrapStacks()
+        stacks = [alpha, beta]
+
+        remote = beta.addRemote(estating.RemoteEstate(stack=beta,
+                                                      ha=alpha.local.ha))
+        beta.join(uid=remote.uid, cascade=False, renewal=False)
+
+        self.serviceStacks([beta], duration=0.05) # send join request
+        self.serviceStacks([alpha], duration=0.05) # read join request and send accept
+
+        # Send duplicate of accept message from joinent
+        alphaRemoteBeta = alpha.remotes.values()[0]
+        betaRemoteAlpha = beta.remotes.values()[0]
+        data = odict(hk=alpha.Hk, bk=alpha.Bk)
+        packet = packeting.RxPacket(stack=alpha)
+        packet.data.update(sh=beta.local.ha[0], sp=beta.local.ha[1],
+                           de=betaRemoteAlpha.uid, se=alphaRemoteBeta.uid)
+        joinent = transacting.Joinent(stack=alpha,
+                                      remote=alphaRemoteBeta,
+                                      sid=0, # always 0 for join
+                                      tid=1,
+                                      txData=data,
+                                      rxPacket=packet)
+        joinent.ackAccept()
+        self.serviceStacks([alpha], duration=0.05) # send duplicate accept
+
+        # Beta: read accept messages (original and duplicate) and send acknowledgment
+        # Alpha: read acknowledgment
+        self.serviceStacks([beta, alpha], duration=0.5)
+
+        # Check that stacks are joined
+        for stack in stacks:
+            self.assertEqual(len(stack.transactions), 0)
+            self.assertEqual(len(stack.remotes), 1)
+            remote = stack.remotes.values()[0]
+            self.assertTrue(remote.joined)
+
+        for stack in stacks:
+            stack.server.close()
+            stack.clearAllKeeps()
+
 def runOne(test):
     '''
     Unittest Runner
@@ -14031,6 +14077,7 @@ def runSome():
                 'testJoinerRestartAckAcceptTransmitted',
                 'testJoinentRestartBeforeAck',
                 'testJoinentRestartAckSent',
+                'testJoinerAcceptIsIdempotent',
             ]
 
     tests.extend(map(BasicTestCase, names))
